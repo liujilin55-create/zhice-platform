@@ -1,0 +1,113 @@
+import { z } from "zod";
+import { competitionSchema, type Competition } from "./types";
+
+const rawCompetitions = [
+  {
+    id: "lanqiao-cup",
+    name: "蓝桥杯全国软件和信息技术专业人才大赛",
+    introduction: "面向高校学生的编程、算法与软件开发综合赛事，适合用作品或竞赛成绩建立技术能力证明。",
+    majorTags: ["计算机", "软件工程", "信息安全", "编程", "算法"],
+    level: "国家级",
+    signupPeriod: "2026.10 — 2026.12",
+    competitionPeriod: "2027.03 — 2027.05",
+    timeMode: "周末集中",
+    officialSite: "https://dasai.lanqiao.cn/",
+    organizer: "工业和信息化部人才交流中心",
+    scoringDimensions: ["算法正确性", "代码质量", "工程实现"],
+    keywords: ["Java", "C++", "Python", "程序设计", "算法", "软件开发"],
+    suitableGrades: ["大一", "大二", "大三", "大四", "研究生"],
+  },
+  {
+    id: "computer-design",
+    name: "中国大学生计算机设计大赛",
+    introduction: "围绕人工智能、数字媒体、软件应用和数据可视化等方向提交可运行的作品，适合展示 AI Web 产品。",
+    majorTags: ["计算机", "软件工程", "人工智能", "设计", "数据科学", "编程"],
+    level: "国家级",
+    signupPeriod: "2027.01 — 2027.04",
+    competitionPeriod: "2027.05 — 2027.08",
+    timeMode: "寒暑假",
+    officialSite: "https://jsjds.blcu.edu.cn/",
+    organizer: "中国高等教育学会",
+    scoringDimensions: ["作品创新性", "技术实现", "交互体验"],
+    keywords: ["AI", "Web", "产品设计", "数据可视化", "多媒体"],
+    suitableGrades: ["大一", "大二", "大三", "大四", "研究生"],
+  },
+  {
+    id: "math-modeling",
+    name: "全国大学生数学建模竞赛",
+    introduction: "以真实问题建模、分析和写作交付为核心，适合计算机、数学、数据科学专业组队参加。",
+    majorTags: ["计算机", "数学", "数据科学", "人工智能", "数学建模"],
+    level: "国家级",
+    signupPeriod: "2027.05 — 2027.08",
+    competitionPeriod: "2027.09",
+    timeMode: "周末集中",
+    officialSite: "https://www.mcm.edu.cn/",
+    organizer: "中国工业与应用数学学会",
+    scoringDimensions: ["问题分析", "模型合理性", "论文表达"],
+    keywords: ["数学建模", "数据分析", "Python", "优化", "论文"],
+    suitableGrades: ["大二", "大三", "大四", "研究生"],
+  },
+  {
+    id: "innovation-entrepreneurship",
+    name: "中国国际大学生创新大赛",
+    introduction: "面向创新项目与创业团队，重视真实需求、商业模式、社会价值和项目落地能力。",
+    majorTags: ["计算机", "人工智能", "创新创业", "商业", "社会实践"],
+    level: "国家级",
+    signupPeriod: "2027.03 — 2027.06",
+    competitionPeriod: "2027.06 — 2027.10",
+    timeMode: "线上灵活",
+    officialSite: "https://cy.ncss.cn/",
+    organizer: "教育部等部门",
+    scoringDimensions: ["项目创新", "社会价值", "商业潜力"],
+    keywords: ["创业", "商业计划", "社会价值", "AI 应用", "产品"],
+    suitableGrades: ["大一", "大二", "大三", "大四", "研究生"],
+  },
+  {
+    id: "electronic-design",
+    name: "全国大学生电子设计竞赛",
+    introduction: "以电子系统设计、嵌入式开发和软硬件协同为核心，适合物联网、自动化和计算机交叉方向。",
+    majorTags: ["计算机", "自动化", "电子信息", "物联网", "人工智能"],
+    level: "国家级",
+    signupPeriod: "2027.04 — 2027.07",
+    competitionPeriod: "2027.08",
+    timeMode: "寒暑假",
+    officialSite: "https://www.nuedc-training.com.cn/",
+    organizer: "全国大学生电子设计竞赛组委会",
+    scoringDimensions: ["系统功能", "工程可靠性", "现场测试"],
+    keywords: ["嵌入式", "硬件", "物联网", "传感器", "系统设计"],
+    suitableGrades: ["大二", "大三", "大四", "研究生"],
+  },
+  {
+    id: "internet-plus",
+    name: "‘互联网+’大学生创新创业大赛",
+    introduction: "适合把 AI 能力包装成真实产品或校园服务，重点考察需求、技术方案、商业模式与社会影响。",
+    majorTags: ["计算机", "软件工程", "人工智能", "创新创业", "商业"],
+    level: "省级",
+    signupPeriod: "2027.03 — 2027.05",
+    competitionPeriod: "2027.05 — 2027.09",
+    timeMode: "线上灵活",
+    officialSite: "https://cy.ncss.cn/",
+    organizer: "教育部",
+    scoringDimensions: ["项目价值", "技术方案", "商业模式"],
+    keywords: ["AI 应用", "创业", "校园服务", "商业计划", "产品"],
+    suitableGrades: ["大一", "大二", "大三", "大四", "研究生"],
+  },
+] satisfies Array<Omit<z.input<typeof competitionSchema>, "competitionId" | "externalLevel" | "campusRecognitionLevel" | "recognitionYear" | "tracks" | "registrationAudience" | "gradeRestrictions" | "majorRestrictions" | "teamSize" | "signupStart" | "signupDeadline" | "competitionTime" | "registrationStatus" | "submissionMaterials" | "officialSourceUrl" | "campusSourceUrl" | "lastVerified" | "verificationStatus" | "dataMode" | "fit">>;
+
+// Existing seeds are discovery examples, never verified eligibility, dates or campus recognition.
+export const competitions: Competition[] = competitionSchema.array().parse(rawCompetitions.map((item) => ({
+  ...item, competitionId: item.id, externalLevel: item.level + "（演示信息，待核验）",
+  campusRecognitionLevel: null, recognitionYear: null,
+  tracks: [{ trackId: item.id + "-general", name: "通用准备（正式赛道待核验）", verificationStatus: "pending" }],
+  registrationAudience: "待以本届官方通知核验", gradeRestrictions: [], majorRestrictions: [],
+  teamSize: { min: null, max: null }, signupStart: null, signupDeadline: null, competitionTime: null,
+  registrationStatus: "unknown", submissionMaterials: [], officialSourceUrl: item.officialSite, campusSourceUrl: null,
+  lastVerified: null, verificationStatus: "pending", dataMode: "demo",
+  fit: { skills: item.keywords, team: item.majorTags, mentor: item.majorTags, resources: item.id === "electronic-design" ? ["设备", "实验室", "硬件"] : ["计算机", "数据", "调研"], weeklyHours: null, budget: null, goals: item.keywords },
+})));
+
+let importedCompetitions: typeof competitions = [];
+export function installCampusCatalog(records: typeof competitions) { importedCompetitions = records; }
+export function getAllCompetitions() { return [...importedCompetitions, ...competitions]; }
+export function getRecommendationCatalog() { return getAllCompetitions().filter((item) => !item.campusCatalog || !importedCompetitions.some((other) => other.campusCatalog?.editionId === item.campusCatalog?.editionId && other.campusCatalog!.version > item.campusCatalog!.version)); }
+export function findCompetition(id: string | null | undefined) { return getAllCompetitions().find((item) => item.competitionId === id) ?? null; }

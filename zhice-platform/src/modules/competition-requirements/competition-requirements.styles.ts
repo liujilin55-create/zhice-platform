@@ -1,0 +1,15 @@
+export const requirementStyles = {
+  page: "space-y-5",
+  hero: "relative overflow-hidden rounded-[24px] bg-[#18213a] px-6 py-7 text-white shadow-xl shadow-indigo-950/10 sm:px-8",
+  panel: "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm",
+  label: "mb-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-500",
+  field: "w-full rounded-xl border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-[12px] text-slate-700 outline-none transition focus:border-indigo-300 focus:bg-white focus:ring-4 focus:ring-indigo-50",
+  sectionTitle: "flex items-center gap-2 text-[14px] font-bold text-slate-900",
+  pill: "inline-flex items-center rounded-full bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-700",
+  card: "rounded-2xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-indigo-200 hover:shadow-md",
+  traceLinks: "mt-2 flex flex-wrap items-center gap-2",
+  traceLink: "inline-flex min-h-8 items-center gap-1 rounded-lg bg-indigo-50 px-2 py-1 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 focus-visible:outline-2 focus-visible:outline-indigo-500",
+  traceMissing: "mt-2 inline-block text-[10px] text-amber-700",
+  reportList: "mt-4 space-y-3",
+  reportItem: "rounded-xl bg-slate-50 p-3 text-[11px] leading-5 text-slate-600",
+} as const;

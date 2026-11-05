@@ -1,0 +1,20 @@
+export const activityStyles = {
+  panel: "min-w-0 scroll-mt-24 rounded-2xl border border-white/10 bg-[#121a28] p-5 text-slate-100 sm:p-6",
+  sectionHeader: "flex flex-wrap items-start justify-between gap-3",
+  title: "flex items-center gap-2 text-base font-semibold text-slate-100",
+  subtitle: "mt-2 text-xs leading-6 text-slate-400",
+  link: "inline-flex min-h-11 items-center gap-1.5 text-xs font-medium text-indigo-300 hover:text-indigo-200 focus-visible:outline-2 focus-visible:outline-indigo-300",
+  feed: "mt-5",
+  feedItem: "relative flex min-w-0 items-start gap-3 py-3 before:absolute before:bottom-0 before:left-[15px] before:top-12 before:w-px before:bg-white/10 last:before:hidden",
+  feedIcon: "relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-white/10 bg-[#172133]",
+  feedBody: "min-w-0 flex-1 border-b border-white/5 pb-4",
+  feedTop: "flex flex-wrap items-start justify-between gap-2",
+  feedTitle: "text-xs font-medium leading-6 text-slate-200 hover:text-indigo-200 focus-visible:outline-2 focus-visible:outline-indigo-300",
+  feedTime: "flex items-center gap-2 text-[11px] tabular-nums leading-6 text-slate-400",
+  feedDetail: "mt-1 break-words text-xs leading-6 text-slate-400",
+  spinner: "motion-safe:animate-spin",
+  empty: "py-8 text-center text-sm leading-7 text-slate-400",
+  emptyIcon: "mx-auto mb-3 text-slate-500",
+  paperMeta: "text-xs leading-5 text-slate-400",
+} as const;
+export const activityTones = { success: "text-emerald-300", running: "text-indigo-300", warning: "text-amber-300", error: "text-rose-300" } as const;
