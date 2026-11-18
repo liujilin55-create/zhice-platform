@@ -1,14 +1,9 @@
 import pptxgen from "pptxgenjs";
 import type { PptOutline, PptSlide, PptTemplate } from "./types";
 import { defaultVisualConfig, pageKinds, type VisualConfig } from "@/modules/campus-catalog/types";
+import { getTemplatePreset } from "./template-config";
 
 type Theme = { background: string; surface: string; accent: string; text: string; muted: string };
-const themes: Record<string, Theme> = {
-  "zhice-dark": { background: "18213A", surface: "243152", accent: "818CF8", text: "F8FAFC", muted: "CBD5E1" },
-  contest: { background: "0F172A", surface: "1E293B", accent: "F97316", text: "FFF7ED", muted: "FED7AA" },
-  "tech-blue": { background: "0C4A6E", surface: "075985", accent: "38BDF8", text: "F0F9FF", muted: "BAE6FD" },
-  minimal: { background: "F8FAFC", surface: "FFFFFF", accent: "334155", text: "0F172A", muted: "64748B" },
-};
 export function slidePageKind(item: PptSlide): typeof pageKinds[number] {
   if ((pageKinds as readonly string[]).includes(item.layout)) return item.layout as typeof pageKinds[number];
   const topic = item.topicIds?.[0];
@@ -29,18 +24,21 @@ export function confirmedChartData(item: PptSlide) {
   return rows.length >= 2 && rows.every((r) => r.unit === rows[0].unit) ? rows : [];
 }
 export async function renderPptx(outline: PptOutline, template: PptTemplate, registeredConfig?: VisualConfig) {
-  if (!themes[template] && !registeredConfig) throw new Error("模板未加载或未授权");
-  const config = registeredConfig || { ...defaultVisualConfig, colors: themes[template] };
-  const theme = config.colors; const pptx = new pptxgen();
+  const preset = getTemplatePreset(template);
+  const config = registeredConfig || { ...defaultVisualConfig, colors: preset.colors, fonts: preset.fonts, chartStyle: preset.chartStyle, coverLayout: preset.coverLayout, closingLayout: preset.closingLayout };
+  const pptx = new pptxgen();
   pptx.layout = "LAYOUT_WIDE"; pptx.author = "知策台"; pptx.company = "知策台 AI Project OS";
   pptx.subject = "Platform-owned editable layout; templateId=" + template; pptx.title = outline.title;
   pptx.theme = { headFontFace: config.fonts.heading, bodyFontFace: config.fonts.body };
   outline.slides.forEach((item, index) => {
-    const slide = pptx.addSlide(); slide.background = { color: theme.background };
+    const slide = pptx.addSlide();
     const kind = slidePageKind(item); const rule = config.layouts.find((r) => r.kind === kind)!;
+    const isCover = kind === "cover" || kind === "closing";
+    const theme: Theme = isCover && !registeredConfig ? preset.cover : config.colors;
+    slide.background = { color: theme.background };
     const body = { fontFace: config.fonts.body, fontSize: rule.bodySize, color: theme.text, margin: 0, fit: "shrink" as const, breakLine: false };
     slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.333, h: .12, line: { transparency: 100 }, fill: { color: theme.accent } });
-    if (kind === "cover" || kind === "closing") {
+    if (isCover) {
       const center = (kind === "cover" ? config.coverLayout : config.closingLayout) === "center";
       slide.addShape(pptx.ShapeType.ellipse, { x: 9.2, y: -.6, w: 4.6, h: 4.6, line: { transparency: 100 }, fill: { color: theme.accent, transparency: 85 } });
       slide.addText(outline.subtitle, { ...body, x: .85, y: 1.0, w: 11.6, h: .6, color: theme.accent, fontSize: 14, align: center ? "center" : "left" });

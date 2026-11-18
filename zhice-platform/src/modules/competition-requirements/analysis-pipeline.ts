@@ -56,7 +56,7 @@ export async function runAnalysis(
   step("papers", "running", "正在检索相关研究，结果返回后即可先阅读");
   const papers = await dependencies.search(keywords, text, signal);
   signal.throwIfAborted();
-  const cached = papers.length > 0 && papers.every((paper) => !/Semantic Scholar/i.test(paper.source));
+  const cached = papers.length > 0 && papers.every((paper) => !/^(Semantic Scholar|OpenAlex)$/i.test(paper.source));
   emit({ type: "papers", papers, cached });
   step("papers", cached ? "warning" : "done", papers.length ? "已返回 " + papers.length + " 篇论文" + (cached ? "，当前使用本地参考资料" : "并完成排序") : "暂未检索到论文，可调整关键词后重试");
   step("requirements", "running", "正在解读主题、评分要求和时间节点");
@@ -113,7 +113,7 @@ export async function runAnalysis(
   else emit({ type: "draft", requirements, report, mode });
   for (const id of modelSteps) step(id, mode === "ai" ? "done" : "warning", mode === "ai" ? "内容已生成" : "已提供演示内容，待核验");
   step("review", "running", "正在校验报告结构，并核对参考文献链接");
-  report.references = papers.slice(0, 4).map((paper) => paper.title + "（" + paper.year + "，" + (paper.authors[0] || "未知作者") + " 等）");
+  report.references = papers.slice(0, 4).map((paper) => paper.title + "（" + (paper.year || "年份未提供") + "，" + (paper.authors[0] || "未知作者") + " 等）");
   const result = analysisResponseSchema.parse({
     ok: true, mode, file: fileInfo, requirements, report, papers, warnings,
     extractedTextPreview: text || "未提取到可读文本，当前结果来自演示模板和专业信息。",

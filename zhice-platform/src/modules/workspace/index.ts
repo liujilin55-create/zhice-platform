@@ -3,3 +3,4 @@ export type { WorkspaceActivity, WorkspaceProject, StudentProfile, ProjectStage,
 export { emptyStudentProfile, studentProfileSchema, projectStageLabels, assetStatusLabels, projectBinding, projectScopeKey, preparationStepView } from "./types";
 export { ActivityFeed } from "./activity-feed";
 export { WorkspaceProjects, ProjectSwitcher } from "./pages/projects/projects";
+export { ProjectSetup } from "./pages/projects/project-setup";

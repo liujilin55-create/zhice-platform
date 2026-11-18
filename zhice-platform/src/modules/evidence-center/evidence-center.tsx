@@ -306,7 +306,7 @@ function EvidenceDrawer({
               </div>
               <div className={styles.metadataGrid}>
                 <div><span className={styles.mutedText}>作者：</span>{record.academic.authors.join("、")}</div>
-                <div><span className={styles.mutedText}>年份：</span>{record.academic.year} · {record.academic.venue}</div>
+                <div><span className={styles.mutedText}>年份：</span>{record.academic.year || "年份未提供"} · {record.academic.venue}</div>
                 {record.academic.doi && <div className={styles.metadataWide}><span className={styles.mutedText}>DOI：</span>{record.academic.doi}</div>}
               </div>
               <p className={styles.abstractText}>{highlightQuotes(record.academic.abstract, record.highlightedQuotes)}</p>

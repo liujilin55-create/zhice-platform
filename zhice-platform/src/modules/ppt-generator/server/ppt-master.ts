@@ -4,13 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { defaultVisualConfig, type VisualConfig } from "@/modules/campus-catalog/types";
 import { pptMasterPlanSchema, type PptMasterPlan, type PptOutline, type PptSlide } from "../types";
-
-const paletteByTemplate: Record<string, string[]> = {
-  "zhice-dark": ["#18213A", "#243152", "#818CF8", "#F8FAFC", "#CBD5E1"],
-  contest: ["#0F172A", "#1E293B", "#F97316", "#FFF7ED", "#FED7AA"],
-  "tech-blue": ["#0C4A6E", "#075985", "#38BDF8", "#F0F9FF", "#BAE6FD"],
-  minimal: ["#F8FAFC", "#FFFFFF", "#334155", "#0F172A", "#64748B"],
-};
+import { canonicalTemplateId, getTemplatePreset } from "../template-config";
 
 const safeText = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&apos;" }[char] || char));
 const safeName = (value: string) => value.replace(/[^\p{L}\p{N}._-]+/gu, "_").slice(0, 80) || "ppt-master";
@@ -22,12 +16,12 @@ const wrap = (value: string, width: number) => {
 
 function visualConfigFor(template: string, config?: VisualConfig) {
   if (config) return config;
-  const colors = paletteByTemplate[template] || paletteByTemplate["zhice-dark"];
-  return { ...defaultVisualConfig, colors: { background: colors[0].slice(1), surface: colors[1].slice(1), accent: colors[2].slice(1), text: colors[3].slice(1), muted: colors[4].slice(1) } };
+  const preset = getTemplatePreset(template);
+  return { ...defaultVisualConfig, colors: preset.colors, fonts: preset.fonts, chartStyle: preset.chartStyle, coverLayout: preset.coverLayout, closingLayout: preset.closingLayout };
 }
 
-export function buildPptMasterPlan(outline: PptOutline, input: { sourceKind: "plan" | "docx"; sourceName: string; template?: string; style?: "story" | "technical" | "evidence"; artifactId?: string; designConfig?: VisualConfig }): PptMasterPlan {
-  const config = visualConfigFor(input.template || "zhice-dark", input.designConfig);
+export function buildPptMasterPlan(outline: PptOutline, input: { sourceKind: "plan" | "docx" | "draft"; sourceName: string; template?: string; style?: "story" | "technical" | "evidence"; artifactId?: string; designConfig?: VisualConfig }): PptMasterPlan {
+  const config = visualConfigFor(input.template || "general", input.designConfig);
   const style = input.style === "story" ? "通用灵活" : input.style === "technical" ? "顶级咨询" : "一般咨询";
   return pptMasterPlanSchema.parse({
     workflow: "ppt-master",
@@ -35,6 +29,7 @@ export function buildPptMasterPlan(outline: PptOutline, input: { sourceKind: "pl
     strategist: "材料 → 设计规范与页级大纲",
     executor: "页级 SVG 产物 + 原生文字形状 → 可编辑 PPTX",
     style,
+    template: canonicalTemplateId(input.template || "general"),
     sourceKind: input.sourceKind,
     sourceName: input.sourceName,
     ...(input.artifactId ? { artifactId: input.artifactId } : {}),
@@ -51,7 +46,7 @@ export function buildPptMasterPlan(outline: PptOutline, input: { sourceKind: "pl
 }
 
 function designSpec(plan: PptMasterPlan, outline: PptOutline) {
-  return `# 设计规范与内容大纲\n\n## PPT Master 适配\n\n- 工作流：Strategist → Human Gate → Executor\n- 画布：${plan.canvas.width}×${plan.canvas.height}（16:9）\n- 风格：${plan.style}\n- 源材料：${plan.sourceKind === "plan" ? "网页计划书" : "外部 DOCX"} · ${plan.sourceName}\n- 页数：${outline.slides.length}\n- 事实门：未确认、待补充、待核验内容保留标记，不升级为确定事实。\n\n## 配色与排版\n\n- 配色：${plan.design.palette.join(" / ")}\n- 标题字体：${plan.design.headingFont}\n- 正文字体：${plan.design.bodyFont}\n- 正文字号基准：${plan.design.bodySizePx}px\n- 图标：${plan.design.iconPolicy}\n- 图片：${plan.design.imagePolicy}\n\n## 页面大纲\n\n${outline.slides.map((slide, index) => `### ${String(index + 1).padStart(2, "0")} · ${slide.title}\n- 布局：${slide.layout || "content"}\n- 要点：${slide.bullets.map((bullet) => `\n  - ${bullet}`).join("")}\n- 章节：${slide.chapterIds?.join("、") || "待关联"}\n- 证据：${slide.evidenceIds?.join("、") || "待关联"}`).join("\n\n")}\n\n## 版权与可编辑性\n\n本项目只保存平台自有设计规则和用户当前材料的归一化内容，不复制外部获奖 PPT 的文本、图片、Logo、原始坐标或整页。最终交付由平台生成可编辑文字、形状和图表；SVG 产物用于质量检查和可追溯归档。\n`;
+  return `# 设计规范与内容大纲\n\n## PPT Master 适配\n\n- 工作流：Strategist → Human Gate → Executor\n- 画布：${plan.canvas.width}×${plan.canvas.height}（16:9）\n- 风格：${plan.style}\n- 模板：${plan.template || "general"}\n- 源材料：${plan.sourceKind === "plan" ? "网页计划书" : plan.sourceKind === "draft" ? "未绑定比赛的草稿" : "外部 DOCX"} · ${plan.sourceName}\n- 页数：${outline.slides.length}\n- 事实门：未确认、待补充、待核验内容保留标记，不升级为确定事实。\n\n## 配色与排版\n\n- 配色：${plan.design.palette.join(" / ")}\n- 标题字体：${plan.design.headingFont}\n- 正文字体：${plan.design.bodyFont}\n- 正文字号基准：${plan.design.bodySizePx}px\n- 图标：${plan.design.iconPolicy}\n- 图片：${plan.design.imagePolicy}\n\n## 页面大纲\n\n${outline.slides.map((slide, index) => `### ${String(index + 1).padStart(2, "0")} · ${slide.title}\n- 布局：${slide.layout || "content"}\n- 要点：${slide.bullets.map((bullet) => `\n  - ${bullet}`).join("")}\n- 章节：${slide.chapterIds?.join("、") || "待关联"}\n- 证据：${slide.evidenceIds?.join("、") || "待关联"}`).join("\n\n")}\n\n## 版权与可编辑性\n\n本项目只保存平台自有设计规则和用户当前材料的归一化内容，不复制外部获奖 PPT 的文本、图片、Logo、原始坐标或整页。最终交付由平台生成可编辑文字、形状和图表；SVG 产物用于质量检查和可追溯归档。\n`;
 }
 
 function slideSvg(slide: PptSlide, index: number, plan: PptMasterPlan) {
@@ -72,7 +67,7 @@ export function masterArtifactUrls(projectId: string, artifactId: string) {
   return { manifest: `/api/ppt?${query}&asset=manifest`, designSpec: `/api/ppt?${query}&asset=design-spec`, notes: `/api/ppt?${query}&asset=notes` };
 }
 
-export async function writePptMasterProject(input: { projectId: string; artifactId?: string; outline: PptOutline; sourceName: string; sourceMarkdown: string; sourceKind: "plan" | "docx"; template?: string; style?: "story" | "technical" | "evidence"; designConfig?: VisualConfig }) {
+export async function writePptMasterProject(input: { projectId: string; artifactId?: string; outline: PptOutline; sourceName: string; sourceMarkdown: string; sourceKind: "plan" | "docx" | "draft"; template?: string; style?: "story" | "technical" | "evidence"; designConfig?: VisualConfig }) {
   const artifactId = input.artifactId || `master-${randomUUID()}`;
   const plan = buildPptMasterPlan(input.outline, { ...input, artifactId });
   const root = path.join(process.cwd(), "public", "generated-ppts", "projects", input.projectId, "ppt-master", artifactId);

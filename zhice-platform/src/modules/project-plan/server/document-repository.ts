@@ -22,7 +22,8 @@ export async function savePlanDocument(raw: unknown) {
   const document = planDocumentSchema.parse(raw);
   if (new Set(document.chapters.map((chapter) => chapter.id)).size !== document.chapters.length) throw new PlanDocumentError("章节标识重复。", 400);
   for (const chapter of document.chapters) {
-    if (chapter.blocks.some((block) => !documentText(chapter).includes(block.text) || block.confirmed && (!chapter.confirmed || block.marker === "supplement"))) throw new PlanDocumentError("内容块或确认状态与章节正文不一致。", 400);
+    if (chapter.blocks.some((block) => !documentText(chapter).includes(block.text))) throw new PlanDocumentError(`${chapter.title}的内容块与当前正文不一致。`, 400);
+    if (chapter.blocks.some((block) => block.confirmed && (!chapter.confirmed || block.marker === "supplement"))) throw new PlanDocumentError(`${chapter.title}的确认标记与章节状态不一致。`, 400);
   }
   document.confirmed = document.chapters.length > 0 && document.chapters.every((chapter) => chapter.confirmed);
   const reference: DocumentReference = { documentId: document.documentId, version: document.version, binding: document.binding, contentHash: digest(JSON.stringify(document)) };

@@ -40,6 +40,10 @@ test("analysis capture persists exact originals and creates reciprocal report li
         title: "Test paper", url: "https://example.com/paper", year: 2026,
         authors: ["Test author"], source: "Semantic Scholar",
         abstract: "Original abstract.", matchedKeywords: ["RAG"], relevanceScore: 90,
+      }, {
+        title: "OpenAlex paper without a publication year", url: "https://example.com/openalex-paper", year: 0,
+        authors: ["OpenAlex fixture author"], source: "OpenAlex",
+        abstract: "OpenAlex original abstract.", matchedKeywords: ["RAG"], relevanceScore: 85,
       }],
     };
     const captured = await captureAnalysis(result, text);
@@ -58,6 +62,12 @@ test("analysis capture persists exact originals and creates reciprocal report li
     assert(captured.links["route-0"].length > 0);
     assert.deepEqual(captured.links["topic-0"], []);
     assert(report.evidence.find((record) => record.kind === "academicPaper").sourceMode === "external");
+    const openAlexPaper = report.evidence.find((record) => record.sourceUrl === "https://example.com/openalex-paper");
+    assert(openAlexPaper);
+    assert.equal(openAlexPaper.sourceMode, "external");
+    assert.equal(openAlexPaper.status, "pending");
+    assert.notEqual(openAlexPaper.occurredAt, "0");
+    assert.match(report.data.blocks.find((block) => block.id === "reference-1").text, /年份未提供/);
     await Promise.all([
       repository.setEvidenceStatus("paper-agent-tool-use", "confirmed"),
       repository.setEvidenceStatus(rules.id, "deprecated"),

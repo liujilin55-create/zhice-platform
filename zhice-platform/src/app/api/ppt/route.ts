@@ -14,6 +14,7 @@ import { documentReferenceSchema } from "@/shared/contracts/plan-document";
 import { bindingKey, competitionBindingSchema } from "@/shared/contracts/competition-binding";
 import { PlanDocumentError } from "@/modules/project-plan/server/document-repository";
 import { generatePlanPpt, inspectPlanPpt } from "@/modules/ppt-generator/server/plan-service";
+import { checkProjectDraftOutline } from "@/modules/ppt-generator/project-draft-outline";
 import { buildPptMasterPlan, masterArtifactUrls, readMasterAsset, writePptMasterProject } from "@/modules/ppt-generator/server/ppt-master";
 
 export const maxDuration = 60;
@@ -85,7 +86,7 @@ export async function GET(request: Request) {
       return new Response(new Uint8Array(content), { headers: { "Content-Type": type, "Content-Disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset === "manifest" ? "manifest.json" : asset === "design-spec" ? "设计规范与内容大纲.md" : "total.md")}`, "Cache-Control": "private, max-age=3600" } });
     } catch (error) { return errorResponse(error instanceof Error ? error.message : "PPT Master 产物不存在。", 404); }
   }
-  if (!id) return Response.json({ history: (await readHistory(projectId)).filter((entry) => !params.get("scope") || entry.bindingKey === params.get("scope")) });
+  if (!id) { const scope = params.get("scope"); return Response.json({ history: (await readHistory(projectId)).filter((entry) => !scope || entry.bindingKey === scope || scope === projectId && !entry.bindingKey) }); }
   if (!/^[a-zA-Z0-9-]+$/.test(id)) return errorResponse("无效的文件标识。", 400);
   try {
     const buffer = await fs.readFile(path.join(projectDirectory(projectId), `${id}.pptx`));
@@ -103,7 +104,7 @@ export async function POST(request: Request) {
       const file = formData.get("file");
       if (!projectIdSchema.safeParse(formData.get("projectId")).success) return errorResponse("请先创建备赛项目。");
       const pageRangeResult = pptPageRangeSchema.safeParse(String(formData.get("pageRange") || "8-10"));
-      const templateResult = pptTemplateSchema.safeParse(String(formData.get("template") || "zhice-dark"));
+      const templateResult = pptTemplateSchema.safeParse(String(formData.get("template") || "general"));
       if (!(file instanceof File)) return errorResponse("请先上传 .docx 文件。");
       if (!pageRangeResult.success || !templateResult.success) return errorResponse("页数范围或模板参数无效。");
       if (file.size > MAX_DOCX_BYTES) return errorResponse("DOCX 文件大小不能超过 15 MB。");
@@ -129,30 +130,32 @@ export async function POST(request: Request) {
       return Response.json({ ok: true, mode, document, outline, warnings });
     }
 
-    const body = await request.json() as { action?: string; outline?: unknown; template?: string; sourceName?: string; projectId?: string; reference?: unknown; options?: unknown; humanConfirmed?: boolean; binding?: unknown };
+    const body = await request.json() as { action?: string; outline?: unknown; template?: string; sourceName?: string; projectId?: string; reference?: unknown; options?: unknown; humanConfirmed?: boolean; binding?: unknown; sourceKind?: "draft" };
     const parsedProject = projectIdSchema.safeParse(body.projectId);
     if (!parsedProject.success) return errorResponse("请先创建备赛项目。");
     const projectId = parsedProject.data;
     if (body.action === "analyzePlan") {
-      const reference = documentReferenceSchema.parse(body.reference); const options = planPptOptionsSchema.parse(body.options || {}); const template = pptTemplateSchema.parse(body.template || "zhice-dark");
+      const reference = documentReferenceSchema.parse(body.reference); const options = planPptOptionsSchema.parse(body.options || {}); const template = pptTemplateSchema.parse(body.template || "general");
       return Response.json(await generatePlanPpt(projectId, reference, options, AbortSignal.any([request.signal, AbortSignal.timeout(55_000)]), template));
     }
     if (body.action !== "render" && body.action !== "check") return errorResponse("无效的 PPT 操作。");
     const outlineResult = pptOutlineSchema.safeParse(body.outline);
-    const templateResult = pptTemplateSchema.safeParse(body.template || "zhice-dark");
+    const templateResult = pptTemplateSchema.safeParse(body.template || "general");
     if (!outlineResult.success) return errorResponse("大纲格式无效，请检查每页标题和要点。");
     if (!templateResult.success) return errorResponse("模板参数无效。");
     if (outlineResult.data.slides.length > 15) return errorResponse("页数最多 15 页，请先精简大纲。");
     let outline = outlineResult.data;
     const reference = documentReferenceSchema.optional().parse(body.reference || outline.planSource);
+    if (outline.draftSource && (reference || outline.draftSource.projectId !== projectId)) return errorResponse("草稿来源与当前项目不一致。", 400);
+    const sourceKind = reference ? "plan" : outline.draftSource || body.sourceKind === "draft" ? "draft" : "docx";
     const owner = reference?.binding || competitionBindingSchema.optional().parse(body.binding);
     if (owner && owner.projectId !== projectId) return errorResponse("比赛绑定与当前项目不一致。");
     let checks: Awaited<ReturnType<typeof inspectPlanPpt>>["checks"] = [];
     if (reference) {
       const inspected = await inspectPlanPpt(projectId, reference, outline); outline = inspected.outline; checks = inspected.checks;
-    }
+    } else if (sourceKind === "draft") checks = checkProjectDraftOutline(outline);
     if (body.action === "check") return Response.json({ ok: true, outline, checks });
-    if (body.humanConfirmed !== true) return errorResponse("请先完成 Human Gate，人工确认大纲后再生成 PPTX。", 409);
+    if (body.humanConfirmed !== true) return errorResponse("请先完成导出前确认，再生成 PPTX。", 409);
     if (checks.some((check) => check.severity === "error")) return Response.json({ error: "一致性检查未通过，请修正错误或明确标注待核验。", checks }, { status: 409 });
     const id = randomUUID();
     const fileName = `${safeFileStem(outlineResult.data.title)}-${id.slice(0, 8)}.pptx`;
@@ -161,13 +164,13 @@ export async function POST(request: Request) {
     await resolveRenderTemplate(templateResult.data);
     if (reference) await inspectPlanPpt(projectId, reference, outline);
     const sourceMarkdown = reference
-      ? `# ${outline.title}\n\n来源：当前项目已确认计划书\n\n${outline.slides.map((slide, index) => `## ${index + 1}. ${slide.title}\n${slide.bullets.map((bullet) => `- ${bullet}`).join("\n")}`).join("\n\n")}`
+      ? `# ${outline.title}\n\n来源：当前项目计划书（未核验内容保留标记）\n\n${outline.slides.map((slide, index) => `## ${index + 1}. ${slide.title}\n${slide.bullets.map((bullet) => `- ${bullet}`).join("\n")}`).join("\n\n")}`
       : `# ${outline.title}\n\n来源：${String(body.sourceName || "外部 DOCX")}\n\n${outline.slides.map((slide, index) => `## ${index + 1}. ${slide.title}\n${slide.bullets.map((bullet) => `- ${bullet}`).join("\n")}`).join("\n\n")}`;
-    const master = await writePptMasterProject({ projectId, outline, sourceName: String(body.sourceName || "外部 DOCX"), sourceMarkdown, sourceKind: reference ? "plan" : "docx", template: templateResult.data, designConfig: selectedTemplate.config });
+    const master = await writePptMasterProject({ projectId, outline, sourceName: String(body.sourceName || "外部 DOCX"), sourceMarkdown, sourceKind, template: templateResult.data, designConfig: selectedTemplate.config });
     await fs.mkdir(projectDirectory(projectId), { recursive: true });
     await fs.writeFile(path.join(projectDirectory(projectId), `${id}.pptx`), buffer);
     const urls = masterArtifactUrls(projectId, master.artifactId);
-    const history: PptHistoryEntry = pptHistoryEntrySchema.parse({ id, fileName, sourceName: String(body.sourceName || "未知 DOCX"), template: templateResult.data, templateId: selectedTemplate.templateId, templateVersion: selectedTemplate.version, templateSource: selectedTemplate.source, templateAuthorization: selectedTemplate.authorization, masterArtifactId: master.artifactId, masterManifestUrl: urls.manifest, masterDesignSpecUrl: urls.designSpec, masterNotesUrl: urls.notes, slideCount: outline.slides.length, createdAt: new Date().toISOString(), projectId, ...(owner ? { bindingKey: bindingKey(owner) } : {}), ...(reference ? { planSource: reference, sourceKind: "plan" } : { sourceKind: "docx" }), downloadUrl: `/api/ppt?projectId=${encodeURIComponent(projectId)}&file=${id}` });
+    const history: PptHistoryEntry = pptHistoryEntrySchema.parse({ id, fileName, sourceName: String(body.sourceName || "未知资料"), template: templateResult.data, templateId: selectedTemplate.templateId, templateVersion: selectedTemplate.version, templateSource: selectedTemplate.source, templateAuthorization: selectedTemplate.authorization, masterArtifactId: master.artifactId, masterManifestUrl: urls.manifest, masterDesignSpecUrl: urls.designSpec, masterNotesUrl: urls.notes, slideCount: outline.slides.length, createdAt: new Date().toISOString(), projectId, bindingKey: owner ? bindingKey(owner) : projectId, ...(reference ? { planSource: reference } : {}), sourceKind, downloadUrl: `/api/ppt?projectId=${encodeURIComponent(projectId)}&file=${id}` });
     await writeHistory(projectId, [history, ...(await readHistory(projectId)).filter((item) => item.id !== id)]);
     return Response.json({ ok: true, history, warnings: checks.filter((check) => check.severity === "warning").map((check) => check.message) });
   } catch (error) {

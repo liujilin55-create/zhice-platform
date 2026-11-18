@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { competitionSchema, type Competition } from "./types";
+import { withInnovationTracks } from "./tracks";
 
 const rawCompetitions = [
   {
@@ -98,7 +99,7 @@ const rawCompetitions = [
 export const competitions: Competition[] = competitionSchema.array().parse(rawCompetitions.map((item) => ({
   ...item, competitionId: item.id, externalLevel: item.level + "（演示信息，待核验）",
   campusRecognitionLevel: null, recognitionYear: null,
-  tracks: [{ trackId: item.id + "-general", name: "通用准备（正式赛道待核验）", verificationStatus: "pending" }],
+  tracks: withInnovationTracks(item.id, item.name, [{ trackId: item.id + "-general", name: "通用准备（正式赛道待核验）", verificationStatus: "pending" }]),
   registrationAudience: "待以本届官方通知核验", gradeRestrictions: [], majorRestrictions: [],
   teamSize: { min: null, max: null }, signupStart: null, signupDeadline: null, competitionTime: null,
   registrationStatus: "unknown", submissionMaterials: [], officialSourceUrl: item.officialSite, campusSourceUrl: null,

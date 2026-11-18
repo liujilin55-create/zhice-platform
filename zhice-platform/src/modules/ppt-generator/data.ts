@@ -1,10 +1,8 @@
 import type { ParsedDocx, PptOutline, PptPageRange, PptTemplate } from "./types";
+import { templatePresets } from "./template-config";
 
 export const templateOptions: Array<{ id: PptTemplate; name: string; description: string; colors: string[] }> = [
-  { id: "zhice-dark", name: "知策深靛", description: "深色科技感，适合 AI 产品答辩", colors: ["#18213a", "#6366f1", "#e0e7ff"] },
-  { id: "contest", name: "竞赛答辩", description: "高对比信息卡，突出评分证据", colors: ["#0f172a", "#f97316", "#fff7ed"] },
-  { id: "tech-blue", name: "科技蓝", description: "清爽蓝色，适合技术方案汇报", colors: ["#0c4a6e", "#0ea5e9", "#e0f2fe"] },
-  { id: "minimal", name: "极简留白", description: "轻量留白，适合研究型展示", colors: ["#f8fafc", "#334155", "#e2e8f0"] },
+  ...Object.values(templatePresets).map((preset) => ({ id: preset.id, name: preset.name, description: preset.description, colors: [`#${preset.colors.background}`, `#${preset.colors.accent}`, `#${preset.colors.surface}`] })),
 ];
 
 export const pageRangeOptions: Array<{ value: PptPageRange; label: string; hint: string }> = [

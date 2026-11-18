@@ -13,7 +13,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
 } });
 const originalCwd = process.cwd(); const directory = await mkdtemp(path.join(tmpdir(), "zhice-plan-ppt-")); process.chdir(directory);
 after(async () => { process.chdir(originalCwd); await rm(directory, { recursive: true, force: true }); });
-const { planDocumentSchema, parseContentBlocks, confirmedBlocks } = await import("../src/shared/contracts/plan-document.ts");
+const { planDocumentSchema, parseContentBlocks, reconcilePlanDocument, confirmedBlocks } = await import("../src/shared/contracts/plan-document.ts");
 const { createPlanOutline, checkPlanOutline, traceOutline, PPT_TOPICS } = await import("../src/modules/ppt-generator/plan-outline.ts");
 const { savePlanDocument, readPlanDocument } = await import("../src/modules/project-plan/server/document-repository.ts");
 const { POST, GET } = await import("../src/app/api/ppt/route.ts");
@@ -53,7 +53,20 @@ test("unified document preserves AI/user content, explicit inference gates, vers
   assert(plans.getState().document.version > editedVersion); assert(plans.getState().chapters["technical-route"].content.includes("30 人"));
   plans.getState().activateProject("plan-test-b", "scope-b"); assert.equal(plans.getState().document, null);
   plans.getState().activateProject(binding.projectId, "scope-a"); assert(plans.getState().document.chapters[0].aiContent.includes("30 人"));
-  await plans.persist.rehydrate(); plans.getState().activateProject(binding.projectId, "scope-a"); assert(plans.getState().document); delete globalThis.localStorage;
+  await plans.persist.rehydrate(); plans.getState().activateProject(binding.projectId, "scope-a"); assert(plans.getState().document);
+  const storageKey = "zhice:project-plan:v1";
+  const legacyState = JSON.parse(storage.get(storageKey));
+  const legacySnapshot = legacyState.state.byProject["scope-a"];
+  const legacyChapter = legacySnapshot.document.chapters[0];
+  legacyChapter.userContent = legacyChapter.aiContent.replace("测试样本为 30 人。", "测试样本已调整为 40 人。");
+  storage.set(storageKey, JSON.stringify(legacyState));
+  await plans.persist.rehydrate(); plans.getState().activateProject(binding.projectId, "scope-a");
+  const restoredChapter = plans.getState().document.chapters[0];
+  assert.equal(restoredChapter.confirmed, false);
+  assert(!restoredChapter.blocks.some((block) => block.text === "测试样本为 30 人。"));
+  assert(restoredChapter.blocks.some((block) => block.text === "测试样本已调整为 40 人。" && !block.confirmed));
+  assert.equal(restoredChapter.blocks.every((block) => !block.confirmed), true);
+  delete globalThis.localStorage;
 });
 test("document API saves an exact bound version, is idempotent and rejects inconsistent block confirmations", async () => {
   const document = makeDocument();
@@ -62,6 +75,106 @@ test("document API saves an exact bound version, is idempotent and rejects incon
   const invalid = structuredClone(document); invalid.chapters[0].blocks[0].text = "伪造的正文";
   await assert.rejects(savePlanDocument(invalid), /不一致/);
   await assert.rejects(readPlanDocument({ ...binding, projectId: "other" }, saved.reference), /没有保存/);
+});
+test("inline content markers preserve exact source text and can be saved as separate blocks", async () => {
+  const text = "【已生成】拟开展测试。【建议补充】样本数量待填。【AI 推断，请核验】预计提升效率。【已生成】收集真实反馈。\n【评分原文与来源】不应进入正文内容块。";
+  const blocks = parseContentBlocks(text, "ai", ["test-evidence"], []);
+  assert.deepEqual(blocks.map(({ text, marker }) => ({ text, marker })), [
+    { text: "拟开展测试。", marker: "generated" },
+    { text: "样本数量待填。", marker: "supplement" },
+    { text: "预计提升效率。", marker: "inference" },
+    { text: "收集真实反馈。", marker: "generated" },
+  ]);
+  assert(blocks.every((block) => text.includes(block.text)));
+  const document = makeDocument(); document.documentId = "inline-marker-document"; document.binding = { ...binding, projectId: "inline-marker-project" };
+  document.chapters = [{ ...document.chapters[0], aiContent: text, blocks, confirmed: false }];
+  assert.equal((await savePlanDocument(document)).data.chapters[0].blocks.length, 4);
+  const legacy = structuredClone(document);
+  legacy.chapters[0].blocks = [{ ...blocks[0], text: "拟开展测试。样本数量待填。预计提升效率。收集真实反馈。", confirmed: true }];
+  const reconciled = reconcilePlanDocument(legacy);
+  const stored = await savePlanDocument(reconciled.document);
+  assert.equal(stored.data.chapters[0].blocks.length, 4);
+  assert.equal(stored.data.chapters[0].confirmed, false);
+  assert(stored.data.chapters[0].blocks.every((block) => !block.confirmed));
+  assert.equal(reconcilePlanDocument(stored.data).repaired, false);
+});
+test("legacy plan blocks are rebuilt from chapter text without carrying stale confirmations", () => {
+  const document = makeDocument();
+  const chapter = document.chapters[0];
+  chapter.userContent = chapter.aiContent.replace("核心方案是可溯源的备赛平台。", "核心方案已调整为可编辑的本地计划书。");
+  const before = chapter.blocks;
+  const result = reconcilePlanDocument(document);
+  const repairedChapter = result.document.chapters[0];
+  assert.equal(result.repaired, true);
+  assert.equal(result.document.version, document.version + 1);
+  assert.equal(repairedChapter.confirmed, false);
+  assert.equal(repairedChapter.userContent, chapter.userContent);
+  assert(!repairedChapter.blocks.some((block) => block.text === "核心方案是可溯源的备赛平台。"));
+  assert(repairedChapter.blocks.some((block) => block.text === "核心方案已调整为可编辑的本地计划书。" && block.origin === "user" && !block.confirmed));
+  assert(repairedChapter.blocks.filter((block) => block.text !== "核心方案已调整为可编辑的本地计划书。").every((block) => !block.confirmed));
+  assert.equal(repairedChapter.blocks.find((block) => block.text === "用户痛点是比赛资料分散。").evidenceIds[0], before[0].evidenceIds[0]);
+
+  const inconsistentConfirmation = structuredClone(makeDocument());
+  inconsistentConfirmation.chapters[0].confirmed = false;
+  inconsistentConfirmation.chapters[0].blocks[0].confirmed = true;
+  const normalized = reconcilePlanDocument(inconsistentConfirmation).document;
+  assert(normalized.chapters[0].blocks.every((block) => !block.confirmed));
+});
+test("client document sync repairs active stale plans before saving and updates the current store version", async () => {
+  const originalFetch = globalThis.fetch;
+  const { useProjectPlanStore: plans } = await import("../src/modules/project-plan/plan.store.ts");
+  const { savePlanDocument: saveClientPlanDocument } = await import("../src/modules/project-plan/services/document-api.ts");
+  const legacy = makeDocument(); legacy.documentId = "legacy-client-plan"; legacy.binding = { ...binding, projectId: "legacy-client-plan" };
+  const chapter = legacy.chapters[0]; chapter.userContent = chapter.aiContent.replace("核心方案是可溯源的备赛平台。", "核心方案已调整为可编辑的本地计划书。");
+  plans.getState().activateProject(legacy.binding.projectId);
+  plans.setState({ document: legacy });
+  globalThis.fetch = async (_url, init) => PUT(new Request("http://localhost/api/project-plan/document", { method: init.method, body: init.body }));
+  try {
+    const savedClient = await saveClientPlanDocument(legacy);
+    const repaired = savedClient.data.chapters[0];
+    assert.equal(repaired.confirmed, false);
+    assert(repaired.blocks.some((block) => block.text === "核心方案已调整为可编辑的本地计划书。"));
+    assert.equal(plans.getState().document.version, savedClient.data.version);
+    assert.equal(plans.getState().document.chapters[0].confirmed, false);
+    const generated = createPlanOutline(savedClient.data, savedClient.reference, options);
+    assert.equal(generated.planSource.version, plans.getState().document.version);
+    const repeated = await saveClientPlanDocument(plans.getState().document);
+    assert.equal(repeated.reference.contentHash, savedClient.reference.contentHash);
+  } finally { globalThis.fetch = originalFetch; }
+});
+test("save repair survives a failed request, project switching and edits during a retry", async () => {
+  const originalFetch = globalThis.fetch;
+  const { useProjectPlanStore: plans } = await import("../src/modules/project-plan/plan.store.ts");
+  const { savePlanDocument: saveClientPlanDocument } = await import("../src/modules/project-plan/services/document-api.ts");
+  const legacy = makeDocument(); legacy.documentId = "retry-client-plan"; legacy.binding = { ...binding, projectId: "retry-client-plan" };
+  legacy.chapters[0].userContent = "【已生成】拟开展测试。【建议补充】样本数量待填。";
+  plans.getState().activateProject(legacy.binding.projectId);
+  plans.setState({ document: legacy });
+  try {
+    globalThis.fetch = async () => { throw new Error("offline"); };
+    await assert.rejects(saveClientPlanDocument(legacy), /网络连接不可用/);
+    const repaired = plans.getState().document;
+    assert.equal(repaired.version, legacy.version + 1);
+    assert(repaired.chapters[0].blocks.every((block) => repaired.chapters[0].userContent.includes(block.text)));
+    globalThis.fetch = async (_url, init) => {
+      plans.getState().activateProject("another-client-project");
+      return PUT(new Request("http://localhost/api/project-plan/document", { method: init.method, body: init.body }));
+    };
+    const stored = await saveClientPlanDocument(repaired);
+    assert.equal(plans.getState().document, null);
+    plans.getState().activateProject(legacy.binding.projectId);
+    assert.equal(plans.getState().document.version, stored.reference.version);
+    globalThis.fetch = async (_url, init) => {
+      plans.getState().setDocumentTitle("保存期间修改的标题");
+      return PUT(new Request("http://localhost/api/project-plan/document", { method: init.method, body: init.body }));
+    };
+    await saveClientPlanDocument(plans.getState().document);
+    assert.equal(plans.getState().document.title, "保存期间修改的标题");
+    assert(plans.getState().document.version > stored.reference.version);
+    globalThis.fetch = async (_url, init) => PUT(new Request("http://localhost/api/project-plan/document", { method: init.method, body: init.body }));
+    const edited = await saveClientPlanDocument(plans.getState().document);
+    assert.equal(edited.data.title, "保存期间修改的标题");
+  } finally { globalThis.fetch = originalFetch; }
 });
 test("plan outline covers all required topics at every page range and only copies confirmed facts", () => {
   const document = makeDocument();
@@ -72,12 +185,36 @@ test("plan outline covers all required topics at every page range and only copie
     assert.equal(checkPlanOutline(result, document).filter((check) => check.severity === "error").length, 0);
   }
 });
-test("projectId plan service generates without DOCX and rejects another project or missing confirmations", async () => {
+test("plan service keeps project isolation and allows unconfirmed text only as explicitly marked draft", async () => {
   const response = await request({ action: "analyzePlan", projectId: binding.projectId, reference: saved.reference, options }); assert.equal(response.status, 200);
   const result = await response.json(); outline = result.outline; assert.equal(result.mode, "local"); assert.equal(outline.slides.length, 12); assert(outline.slides.some((slide) => slide.bullets.some((text) => text.includes("30 人"))));
   assert.equal((await request({ action: "analyzePlan", projectId: "other-project", reference: saved.reference, options })).status, 400);
   const unconfirmed = makeDocument(); unconfirmed.binding = { ...binding, projectId: "empty-plan" }; unconfirmed.documentId = "empty"; for (const chapter of unconfirmed.chapters) { chapter.confirmed = false; for (const block of chapter.blocks) block.confirmed = false; }
-  const empty = await savePlanDocument(unconfirmed); assert.equal((await request({ action: "analyzePlan", projectId: "empty-plan", reference: empty.reference, options })).status, 400);
+  const empty = await savePlanDocument(unconfirmed);
+  const draftResponse = await request({ action: "analyzePlan", projectId: "empty-plan", reference: empty.reference, options });
+  assert.equal(draftResponse.status, 200);
+  const draft = await draftResponse.json();
+  assert(JSON.stringify(draft.outline).includes("核心方案是可溯源的备赛平台"), "drafts should retain the user's real text");
+  assert(draft.outline.slides.every((slide) => slide.bullets.every((text) => /^【(?:待核验|建议补充)/.test(text))));
+  assert(draft.outline.slides.every((slide) => slide.claims.every((claim) => !claim.confirmed)));
+  assert.equal(draft.checks.filter((check) => check.severity === "error").length, 0);
+  assert.equal(confirmedBlocks((await readPlanDocument(unconfirmed.binding, empty.reference)).data).length, 0, "generating a draft must never confirm its source");
+});
+
+test("unbound project drafts export with their true source and reject cross-project or unmarked facts", async () => {
+  const { createProjectDraftOutline } = await import("../src/modules/ppt-generator/project-draft-outline.ts");
+  const draft = createProjectDraftOutline("general-draft-project", "独立通用草稿", [{ id: "project-intro", title: "项目介绍", content: "拟为校园团队提供材料整理工具。", status: "draft", updatedAt: now }], options);
+  assert.equal(draft.planSource, undefined);
+  assert(draft.slides.every((slide) => slide.bullets.every((text) => /^【(?:待核验|建议补充)/.test(text))));
+  assert.equal((await request({ action: "render", projectId: "another-project", outline: draft, template: "minimal", humanConfirmed: true })).status, 400);
+  const unmarked = structuredClone(draft); unmarked.slides[1].bullets = ["项目收入为 999 万元。"];
+  assert.equal((await request({ action: "render", projectId: "general-draft-project", outline: unmarked, template: "minimal", humanConfirmed: true })).status, 409);
+  const response = await request({ action: "render", projectId: "general-draft-project", outline: draft, sourceName: "未绑定比赛的计划书草稿", template: "minimal", humanConfirmed: true });
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.history.sourceKind, "draft"); assert.equal(result.history.bindingKey, "general-draft-project"); assert.equal(result.history.planSource, undefined);
+  const history = await (await GET(new Request("http://localhost/api/ppt?projectId=general-draft-project&scope=general-draft-project"))).json();
+  assert.equal(history.history.length, 1);
 });
 test("consistency rejects new numbers, unsupported conclusions, notes, blank pages and excess capacity", () => {
   const document = makeDocument();

@@ -23,7 +23,7 @@ export async function captureAnalysis(result: AnalysisResponse, extractedText: s
     ...result.report.innovationPoints.map((text, index) => ({ id: "innovation-" + index, heading: "创新点 · " + (index + 1), text })),
     ...result.report.plan.map((item, index) => ({ id: "plan-" + index, heading: item.phase + " · " + item.days, text: item.tasks.join("\n") })),
     ...result.report.risks.map((text, index) => ({ id: "risk-" + index, heading: "风险提醒 · " + (index + 1), text })),
-    ...result.papers.map((paper, index) => ({ id: "reference-" + index, heading: "参考文献 · " + (index + 1), text: paper.title + "\n" + paper.authors.join("、") + " · " + paper.year + "\n" + paper.url })),
+    ...result.papers.map((paper, index) => ({ id: "reference-" + index, heading: "参考文献 · " + (index + 1), text: paper.title + "\n" + paper.authors.join("、") + " · " + (paper.year || "年份未提供") + "\n" + paper.url })),
   ];
   return mutateEvidenceDatabase((database) => {
     database.reports.push({ id: reportId, title: result.requirements.title + " · 指导报告", createdAt: now, mode: result.mode, blocks, binding: result.binding, sources: result.sources || [], scoringClauses: result.scoringClauses || [] });
@@ -55,8 +55,8 @@ export async function captureAnalysis(result: AnalysisResponse, extractedText: s
         const record: EvidenceDatabase["records"][number] = {
           id: evidenceId, kind: "academicPaper", title: paper.title,
           source: paper.source, sourceUrl: paper.url,
-          sourceMode: /Semantic Scholar/i.test(paper.source) ? "external" : "sample",
-          occurredAt: String(paper.year), cachedAt: now, pageRef: "摘要",
+          sourceMode: /^(Semantic Scholar|OpenAlex)$/i.test(paper.source) ? "external" : "sample",
+          occurredAt: paper.year ? String(paper.year) : "年份未提供", cachedAt: now, pageRef: "摘要",
           tags: paper.matchedKeywords, status: "pending", cacheState: "cached",
           relevance: Math.max(0, Math.min(1, paper.relevanceScore / 100)),
           excerpt: paper.abstract.slice(0, 180),

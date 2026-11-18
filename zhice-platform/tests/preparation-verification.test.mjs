@@ -130,13 +130,13 @@ test("verification links reject executable and disguised external relative URLs"
 
 test("failed material paper search returns no irrelevant software demo papers", async () => {
   const { searchAcademicPapers } = await import("../src/modules/competition-requirements/analyzer.ts");
-  const originalFetch = globalThis.fetch; let query = "";
-  globalThis.fetch = async (url) => { query = new URL(url).searchParams.get("query"); return new Response("rate limited", { status: 429 }); };
+  const originalFetch = globalThis.fetch; const queries = [];
+  globalThis.fetch = async (url) => { const params = new URL(url).searchParams; queries.push(params.get("query") || params.get("query.title") || params.get("search")); return new Response("rate limited", { status: 429 }); };
   try {
-    assert.deepEqual(await searchAcademicPapers(["竹纤维", "缓冲包装"], "竹材料方案"), []); assert.match(query, /bamboo/);
+    assert.deepEqual(await searchAcademicPapers(["竹纤维", "缓冲包装"], "竹材料方案"), []); assert(queries.length > 0); assert(queries.every((query) => /bamboo/.test(query)));
     const { POST } = await import("../src/app/api/papers/route.ts");
     const response = await POST(new Request("http://localhost/api/papers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: "竹纤维 模塑缓冲包装 压缩性能" }) }));
-    assert.deepEqual(await response.json(), { data: [], cached: false });
+    assert.equal(response.status, 503); assert.match((await response.json()).error, /检索服务.*不可用/);
   }
   finally { globalThis.fetch = originalFetch; }
 });

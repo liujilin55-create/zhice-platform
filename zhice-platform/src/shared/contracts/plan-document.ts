@@ -30,15 +30,62 @@ export function confirmedBlocks(document: PlanDocument) { return document.chapte
 
 export function parseContentBlocks(text: string, origin: "user" | "ai", evidenceIds: string[], sourceIds: string[], previous: PlanBlock[] = []): PlanBlock[] {
   let marker: PlanBlock["marker"] = "generated";
-  return text.split("【评分原文与来源】")[0].split(/\n+/).flatMap((line) => {
+  const usedPreviousIds = new Set<string>();
+  // Inline markers delimit blocks too, so every block remains an exact substring of the chapter.
+  return text.split("【评分原文与来源】")[0].split(/\n+|(?=【(?:已生成|建议补充|AI\s*推断[，,]?\s*请核验)】)/).flatMap((line) => {
     const raw = line.trim(); if (!raw) return [];
     if (/【建议补充】/.test(raw)) marker = "supplement";
     else if (/【AI\s*推断[，,]?\s*请核验】/.test(raw)) marker = "inference";
     else if (/【已生成】/.test(raw)) marker = "generated";
-    const value = raw.replace(/【(?:已生成|建议补充|AI\s*推断[，,]?\s*请核验)】/g, "").trim();
+    const value = raw.replace(/^【(?:已生成|建议补充|AI\s*推断[，,]?\s*请核验)】/, "").trim();
     if (!value) return [];
     const blockMarker = /_{2,}|待补充|待填写|待填/.test(value) ? "supplement" as const : marker;
-    const existing = previous.find((block) => block.text === value && block.marker === blockMarker);
+    const existing = previous.find((block) => !usedPreviousIds.has(block.id) && block.text === value && block.marker === blockMarker);
+    if (existing) usedPreviousIds.add(existing.id);
     return [{ id: existing?.id || crypto.randomUUID(), text: value, marker: blockMarker, origin: existing?.origin || origin, confirmed: false, evidenceIds: existing?.evidenceIds || evidenceIds, sourceIds: existing?.sourceIds || sourceIds }];
   });
+}
+
+/** Rebuild stale blocks from the saved chapter text; only exact old blocks retain provenance and confirmation. */
+export function reconcilePlanDocument(document: PlanDocument, options: { bumpVersion?: boolean } = {}) {
+  let repaired = false;
+  const chapters = document.chapters.map((chapter) => {
+    const origin = chapter.userContent === null ? "ai" : "user";
+    const parsed = parseContentBlocks(documentText(chapter), origin, [], [], chapter.blocks);
+    const previousById = new Map(chapter.blocks.map((block) => [block.id, block]));
+    const hasNewBlocks = parsed.some((block) => {
+      const previous = previousById.get(block.id);
+      return !previous || previous.text !== block.text || previous.marker !== block.marker;
+    });
+    const confirmed = chapter.confirmed && !hasNewBlocks;
+    const blocks = parsed.map((block) => {
+      const previous = previousById.get(block.id);
+      return {
+        ...block,
+        confirmed: confirmed && block.marker !== "supplement" && Boolean(previous?.confirmed),
+      };
+    });
+    const sameBlocks = blocks.length === chapter.blocks.length && blocks.every((block, index) => {
+      const previous = chapter.blocks[index];
+      return block.id === previous.id && block.text === previous.text && block.marker === previous.marker
+        && block.origin === previous.origin && block.confirmed === previous.confirmed
+        && block.evidenceIds.length === previous.evidenceIds.length && block.evidenceIds.every((id, i) => id === previous.evidenceIds[i])
+        && block.sourceIds.length === previous.sourceIds.length && block.sourceIds.every((id, i) => id === previous.sourceIds[i]);
+    });
+    if (sameBlocks && confirmed === chapter.confirmed) return chapter;
+    repaired = true;
+    return { ...chapter, blocks, confirmed };
+  });
+  const confirmed = chapters.length > 0 && chapters.every((chapter) => chapter.confirmed);
+  if (document.confirmed !== confirmed) repaired = true;
+  if (!repaired) return { document, repaired: false };
+  return {
+    document: {
+      ...document,
+      chapters,
+      confirmed,
+      ...(options.bumpVersion === false ? {} : { version: document.version + 1, updatedAt: new Date().toISOString() }),
+    },
+    repaired: true,
+  };
 }

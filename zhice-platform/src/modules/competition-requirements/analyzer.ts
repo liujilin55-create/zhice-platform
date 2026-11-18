@@ -1,6 +1,7 @@
 import Fuse from "fuse.js";
 import { demoPapers, demoReport, demoRequirements } from "./data";
-import { competitionRequirementsSchema, guidanceReportSchema, paperSchema, type CompetitionRequirements, type GuidanceReport, type Paper } from "./types";
+import { competitionRequirementsSchema, guidanceReportSchema, type CompetitionRequirements, type GuidanceReport, type Paper } from "./types";
+import { searchRemotePapers } from "./academic-search";
 
 const keywordAliases: Record<string, string[]> = {
   "人工智能": ["AI", "大模型", "Agent", "机器学习"],
@@ -51,36 +52,16 @@ export function rankPapers(keywords: string[], text: string, papers: Paper[] = d
   return papers.map((paper) => scorePaper(paper, keywords, text)).sort((a, b) => b.relevanceScore - a.relevanceScore).slice(0, 6);
 }
 
-export async function searchAcademicPapers(keywords: string[], text: string, signal?: AbortSignal) {
+export async function searchAcademicPapers(keywords: string[], text: string, signal?: AbortSignal, options: { onlineOnly?: boolean } = {}) {
   signal?.throwIfAborted();
-  const endpoint = process.env.ACADEMIC_API_URL || "https://api.semanticscholar.org/graph/v1/paper/search";
-  if (!keywords.length) return rankPapers(demoRequirements.keywords, text);
-
+  if (!keywords.length) return options.onlineOnly ? [] : rankPapers(demoRequirements.keywords, text);
   try {
-    const url = new URL(endpoint);
-    const materialQuery = /竹|木质|缓冲|育苗|板材/.test(keywords.join(" "));
-    url.searchParams.set("query", materialQuery ? /育苗/.test(keywords.join(" ")) ? "bamboo fiber nursery containers wet strength" : /板材/.test(keywords.join(" ")) ? "bamboo wood residues composite board mechanical properties" : "bamboo fiber molded pulp cushioning packaging compression moisture" : keywords.slice(0, 6).join(" "));
-    url.searchParams.set("limit", "6");
-    url.searchParams.set("fields", "title,authors,year,abstract,url,citationCount,externalIds");
-    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(8000)]) : AbortSignal.timeout(8000), headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`academic api ${response.status}`);
-    const payload = await response.json() as { data?: Array<{ paperId?: string; title?: string; authors?: Array<{ name?: string }>; year?: number; abstract?: string; url?: string; citationCount?: number }> };
-    const remote = (payload.data ?? []).filter((paper) => paper.title && paper.url).map((paper, index) => paperSchema.parse({
-      id: paper.paperId || `academic-${index}`,
-      title: paper.title,
-      authors: (paper.authors ?? []).map((author) => author.name).filter((name): name is string => Boolean(name)).slice(0, 4),
-      year: paper.year || 2020,
-      abstract: paper.abstract || "摘要暂未提供，建议打开来源页面核对。",
-      url: paper.url,
-      source: "Semantic Scholar",
-      citationCount: paper.citationCount || 0,
-      relevanceScore: 0,
-      matchedKeywords: [],
-    }));
-    if (remote.length) return rankPapers(keywords, text, remote);
-  } catch {
+    const remote = await searchRemotePapers(keywords, signal);
+    if (remote.length || options.onlineOnly) return rankPapers(keywords, text, remote);
+  } catch (failure) {
     signal?.throwIfAborted();
-    // Academic APIs are best-effort. The local cache keeps the demo useful during rate limits or offline judging.
+    if (options.onlineOnly) throw failure;
+    // Keep the analysis demo usable offline; explicit paper searches only use online sources.
   }
   const related = demoPapers.filter((paper) => keywords.some((keyword) => normalize(`${paper.title} ${paper.abstract} ${paper.matchedKeywords.join(" ")}`).includes(normalize(keyword))));
   return rankPapers(keywords, text, related);
@@ -90,7 +71,7 @@ export function createDemoReport(requirements: CompetitionRequirements, papers: 
   return guidanceReportSchema.parse({
     ...demoReport,
     overview: `${demoReport.overview}${major ? ` 结合${major}专业，优先选择能体现数据、算法或 AI 工程能力的切入点。` : " 建议补充专业信息后再收窄技术路线。"}`,
-    references: papers.slice(0, 4).map((paper) => `${paper.title}（${paper.year}，${paper.authors[0] || "未知作者"} 等）`),
+    references: papers.slice(0, 4).map((paper) => `${paper.title}（${paper.year || "年份未提供"}，${paper.authors[0] || "未知作者"} 等）`),
     scoringSuggestions: demoReport.scoringSuggestions.map((item) => item.criterion === "AI 技术深度" ? { ...item, action: `${item.action} 当前识别到的关键词包括：${requirements.keywords.slice(0, 4).join("、")}。` } : item),
   });
 }

@@ -68,6 +68,9 @@ export type PlanContext = z.infer<typeof planContextSchema>;
 
 export const planEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("meta"), mode: z.enum(["ai", "local"]) }),
+  z.object({ type: z.literal("reference_stage"), chapterId: z.string(), stage: z.enum(["context", "outline", "writing", "review"]), status: z.enum(["running", "done"]), detail: z.string() }),
+  z.object({ type: z.literal("reference_outline_delta"), chapterId: z.string(), text: z.string() }),
+  z.object({ type: z.literal("reference_outline"), chapterId: z.string(), text: z.string() }),
   z.object({ type: z.literal("survey_partial"), reply: z.string(), currentSlot: planSlotIdSchema.nullable(), captured: capturedSlotSchema, complete: z.boolean() }),
   z.object({ type: z.literal("survey"), turn: surveyTurnSchema, session: surveySessionSchema }),
   z.object({ type: z.literal("report_partial"), report: z.record(z.string(), z.unknown()) }),
@@ -100,9 +103,23 @@ export const PLAN_CHAPTERS = [
   { id: "risk-response", title: "风险应对" }, { id: "conclusion", title: "结语与参赛目标" },
 ] as const;
 
+export const chapterReferenceRequestSchema = z.object({
+  action: z.literal("chapter_reference"),
+  workspace: planWorkspaceSchema,
+  session: surveySessionSchema,
+  report: planReportSchema.nullable().default(null),
+  chapterId: z.enum(PLAN_CHAPTERS.map((chapter) => chapter.id)),
+  projectName: z.string().trim().max(160).default(""),
+  instructions: z.string().trim().max(2000).default(""),
+  currentContent: z.string().max(40000).default(""),
+});
+export type ChapterReferenceRequest = z.infer<typeof chapterReferenceRequestSchema>;
+
 export function preparationChapters(preparation?: Preparation) {
   const titles: Record<string, string> = { "executive-summary": "项目摘要", "project-intro": "产业问题与项目背景", "market-analysis": "需求调研与应用场景", "product-design": "材料与产品方案", "technical-route": "工艺路线与性能验证", team: "团队分工与资源条件", "business-model": "应用路径与产业价值", finance: "预算与成本测算", "risk-response": "风险与验证缺口", conclusion: "参赛目标与材料准备" };
-  return PLAN_CHAPTERS.map((chapter) => ({ ...chapter, title: preparation?.topicId ? titles[chapter.id] : chapter.title }));
+  const direction = preparation?.topicTitle || "";
+  const materialDirection = /竹|木材|纤维|板材|缓冲包装|复合材料|建筑材料|高分子|生物基|可降解|湿态|成型|涂层|胶黏|材料性能|材料制备|工艺验证/.test(direction) && !/软件|平台|小程序|应用程序|管理系统/.test(direction);
+  return PLAN_CHAPTERS.map((chapter) => ({ ...chapter, title: materialDirection ? titles[chapter.id] : chapter.title }));
 }
 
 export function emptyPlanSlots(): PlanSlotMap {

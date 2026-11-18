@@ -5,7 +5,9 @@ export const pptCheckSchema = z.object({ code: z.string(), severity: z.enum(["er
 export type PptCheck = z.infer<typeof pptCheckSchema>;
 export const slideClaimSchema = z.object({ text: z.string(), origin: z.enum(["user", "ai", "pending"]), confirmed: z.boolean(), blockIds: z.array(z.string()), chapterIds: z.array(z.string()), evidenceIds: z.array(z.string()), sourceIds: z.array(z.string()).optional() });
 
-export const builtinTemplateSchema = z.enum(["zhice-dark", "contest", "tech-blue", "minimal"]);
+// Keep the previous IDs accepted so saved drafts and exported history remain readable.
+// The four canonical options shown in the UI are the PPT Master templates below.
+export const builtinTemplateSchema = z.enum(["general", "consultant", "consultant_top", "academic_defense", "zhice-dark", "contest", "tech-blue", "minimal"]);
 export const pptTemplateSchema = z.union([builtinTemplateSchema, z.string().regex(/^tpl-[a-f0-9-]{36}$/)]);
 export const pptPageRangeSchema = z.enum(["8-10", "11-13", "14-15"]);
 
@@ -24,7 +26,8 @@ export const pptMasterPlanSchema = z.object({
   strategist: z.literal("材料 → 设计规范与页级大纲"),
   executor: z.literal("页级 SVG 产物 + 原生文字形状 → 可编辑 PPTX"),
   style: z.enum(["通用灵活", "一般咨询", "顶级咨询"]),
-  sourceKind: z.enum(["plan", "docx"]),
+  template: z.string().min(1).max(80).optional(),
+  sourceKind: z.enum(["plan", "docx", "draft"]),
   sourceName: z.string().max(240),
   artifactId: z.string().regex(/^master-[a-f0-9-]{36}$/).optional(),
   artifactUrls: z.object({ manifest: z.string(), designSpec: z.string(), notes: z.string() }).optional(),
@@ -45,6 +48,7 @@ export const pptOutlineSchema = z.object({
   subtitle: z.string().max(240),
   slides: z.array(pptSlideSchema).min(5).max(20),
   planSource: documentReferenceSchema.optional(),
+  draftSource: z.object({ projectId: z.string().min(1), contentKey: z.string().min(1) }).optional(),
   reviewWarnings: z.array(z.string()).optional(),
   master: pptMasterPlanSchema.optional(),
 });
@@ -71,7 +75,7 @@ export const pptHistoryEntrySchema = z.object({
   slideCount: z.number(),
   createdAt: z.string(),
   downloadUrl: z.string(),
-  bindingKey: z.string().optional(), planSource: documentReferenceSchema.optional(), sourceKind: z.enum(["plan", "docx"]).optional(),
+  bindingKey: z.string().optional(), planSource: documentReferenceSchema.optional(), sourceKind: z.enum(["plan", "docx", "draft"]).optional(),
 });
 
 export const pptAnalyzeResponseSchema = z.object({

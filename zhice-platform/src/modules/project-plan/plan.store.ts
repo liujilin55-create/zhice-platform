@@ -5,7 +5,7 @@ import { persist } from "zustand/middleware";
 import { z } from "zod";
 import { getLegacyProjectId, registerProjectScope } from "@/shared/store/project-scope";
 import { emptySurveySession, planChapterSchema, planReportSchema, surveySessionSchema, type PlanChapter, type PlanMessage, type PlanReport, type PlanSlotId, type PlanSlotMap, type SurveySession } from "./types";
-import { planDocumentSchema, parseContentBlocks, type PlanDocument } from "@/shared/contracts/plan-document";
+import { planDocumentSchema, parseContentBlocks, reconcilePlanDocument, type PlanDocument } from "@/shared/contracts/plan-document";
 import { sameBinding, type CompetitionBinding, type RequirementSource, type ScoringClause } from "@/shared/contracts/competition-binding";
 
 const snapshotSchema = z.object({
@@ -17,6 +17,16 @@ type PlanSnapshot = z.infer<typeof snapshotSchema>;
 function emptySnapshot(): PlanSnapshot { return { phase: "survey", session: emptySurveySession(), report: null, chapters: {}, activeChapterId: null, document: null, versions: [] }; }
 const snapshot = (state: PlanSnapshot): PlanSnapshot => ({ phase: state.phase, session: state.session, report: state.report, chapters: state.chapters, activeChapterId: state.activeChapterId, document: state.document, versions: state.versions });
 const checkpoint = (versions: PlanDocument[], document: PlanDocument | null) => document && versions.at(-1)?.version !== document.version ? [...versions, structuredClone(document)].slice(-20) : versions;
+function reconcileSnapshot(data: PlanSnapshot): PlanSnapshot {
+  const current = data.document ? reconcilePlanDocument(data.document) : null;
+  const document = current?.document || null;
+  const versions = data.versions.map((version) => reconcilePlanDocument(version, { bumpVersion: false }).document);
+  const chapters = { ...data.chapters };
+  for (const chapter of document?.chapters || []) {
+    if (!chapter.confirmed && chapters[chapter.id]?.status === "confirmed") chapters[chapter.id] = { ...chapters[chapter.id], status: "draft" };
+  }
+  return { ...data, document, versions, chapters };
+}
 const transient = { streamingReply: "", streamingReport: null, streamingChapter: "", busy: false, error: null };
 type PlanState = {
   projectId: string | null; scopeKey: string | null; byProject: Record<string, PlanSnapshot>; activateProject: (id: string | null, key?: string | null) => void;
@@ -26,10 +36,12 @@ type PlanState = {
   setDocumentContext: (projectName: string, binding: CompetitionBinding, sources: RequirementSource[], criteria: ScoringClause[], preparationKey?: string | null) => void;
   acceptPreparation: (preparationKey: string, session: SurveySession) => void;
   setDocumentTitle: (title: string) => void; saveVersion: () => void; restoreVersion: (version?: number) => void;
+  syncDocumentSnapshot: (submitted: PlanDocument, updated: PlanDocument) => void;
   busy: boolean; error: string | null; setHydrated: () => void; reset: () => void;
   addMessage: (message: PlanMessage) => void; setSession: (session: SurveySession) => void; setStreamingReply: (value: string) => void; setStreamingReport: (value: Partial<PlanReport> | null) => void;
   setReport: (report: PlanReport) => void; setPhase: (phase: PlanState["phase"]) => void; setActiveChapter: (id: string | null) => void;
   upsertChapter: (chapter: PlanChapter, origin?: "user" | "ai", verifyInferences?: boolean) => void; setStreamingChapter: (value: string) => void; setBusy: (busy: boolean) => void; setError: (error: string | null) => void;
+  importProjectDrafts: (binding: CompetitionBinding) => number;
 };
 export const useProjectPlanStore = create<PlanState>()(persist((set, get) => ({
   projectId: null, scopeKey: null, byProject: {},
@@ -56,6 +68,16 @@ export const useProjectPlanStore = create<PlanState>()(persist((set, get) => ({
     return { versions: checkpoint(state.versions, state.document), document, session, report: null, phase: "survey", chapters: Object.fromEntries(Object.entries(state.chapters).map(([id, chapter]) => [id, { ...chapter, status: "draft" as const }])) };
   }),
   setDocumentTitle: (title) => set((state) => state.document && title.trim() ? { document: { ...state.document, title: title.slice(0, 160), version: state.document.version + 1, updatedAt: new Date().toISOString() } } : {}),
+  syncDocumentSnapshot: (submitted, updated) => set((state) => {
+    if (!state.document || state.document.documentId !== submitted.documentId || state.document.version !== submitted.version
+      || !sameBinding(state.document.binding, submitted.binding) || JSON.stringify(state.document) !== JSON.stringify(submitted)) return {};
+    const chapters = { ...state.chapters };
+    for (const chapter of updated.chapters) {
+      const current = chapters[chapter.id];
+      if (current && !chapter.confirmed && current.status === "confirmed") chapters[chapter.id] = { ...current, status: "draft" };
+    }
+    return { document: updated, chapters, versions: checkpoint(state.versions, state.document) };
+  }),
   saveVersion: () => set((state) => ({ versions: checkpoint(state.versions, state.document) })),
   restoreVersion: (version) => set((state) => {
     const previous = version ? state.versions.find((item) => item.version === version) : state.versions.findLast((item) => item.version !== state.document?.version);
@@ -76,14 +98,24 @@ export const useProjectPlanStore = create<PlanState>()(persist((set, get) => ({
     const updated = { id: chapter.id, title: chapter.title, aiContent: origin === "ai" ? chapter.content : previous?.aiContent || "", userContent: origin === "user" ? chapter.content : null, blocks, confirmed: chapter.status === "confirmed", updatedAt: chapter.updatedAt };
     const chapters = [...document.chapters.filter((item) => item.id !== chapter.id), updated];
     return { chapters: { ...state.chapters, [chapter.id]: chapter }, versions: origin === "ai" || chapter.status === "confirmed" || previous?.confirmed ? checkpoint(state.versions, document) : state.versions, document: { ...document, chapters, confirmed: chapters.every((item) => item.confirmed), version: document.version + 1, updatedAt: new Date().toISOString() } };
-  }), setStreamingChapter: (streamingChapter) => set({ streamingChapter }), setBusy: (busy) => set({ busy }), setError: (error) => set({ error }),
+  }),
+  importProjectDrafts: (binding) => {
+    const state = get();
+    if (state.projectId !== binding.projectId || !state.document || !sameBinding(state.document.binding, binding) || state.scopeKey === binding.projectId) return 0;
+    const original = state.byProject[binding.projectId];
+    if (!original) return 0;
+    const chapters = Object.values(original.chapters).filter((chapter) => !chapter.binding && !state.chapters[chapter.id]);
+    for (const chapter of chapters) get().upsertChapter({ ...chapter, binding, status: "draft", generationStatus: "draft", updatedAt: new Date().toISOString() });
+    return chapters.length;
+  },
+  setStreamingChapter: (streamingChapter) => set({ streamingChapter }), setBusy: (busy) => set({ busy }), setError: (error) => set({ error }),
 }), {
   name: "zhice:project-plan:v1", skipHydration: true,
   partialize: (state) => ({ byProject: { ...state.byProject, ...(state.scopeKey ? { [state.scopeKey]: snapshot(state) } : {}) } }),
   merge: (persisted, current) => {
     const value = (persisted || {}) as Record<string, unknown>;
     const byProject = Object.fromEntries(Object.entries((value.byProject || {}) as Record<string, unknown>).flatMap(([id, data]) => {
-      const parsed = snapshotSchema.safeParse(data); return parsed.success ? [[id, parsed.data]] : [];
+      const parsed = snapshotSchema.safeParse(data); return parsed.success ? [[id, reconcileSnapshot(parsed.data)]] : [];
     }));
     const legacyOwner = getLegacyProjectId();
     if (!value.byProject && value.session && !legacyOwner && typeof localStorage !== "undefined") {

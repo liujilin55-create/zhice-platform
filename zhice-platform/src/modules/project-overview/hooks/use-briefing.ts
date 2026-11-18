@@ -42,7 +42,7 @@ export function useBriefing(snapshot: OverviewSnapshot | null, projectName: stri
           if (event.type === "complete") finished = true;
           setState({ text, mode, key, status: finished ? "done" : "streaming", error: null });
         });
-        store.finishActivity(activity, { status: fallback ? "warning" : "success", title: fallback ? "简报已降级为本地摘要" : "项目简报已生成", detail: mode === "local" ? "基于当前项目数据的本地摘要" : "AI 建议，仅供参考" });
+        store.finishActivity(activity, { status: fallback ? "warning" : "success", title: fallback ? "简报已降级为本地摘要" : "项目简报已生成", detail: mode === "local" ? "基于当前项目数据的本地摘要" : "智能建议，仅供参考" });
         try { sessionStorage.setItem("zhice:briefing:v1", JSON.stringify({ key, text, mode, at: Date.now() })); } catch { /* Keep the current text available. */ }
       } catch (error) {
         if (controller.signal.aborted) return;

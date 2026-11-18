@@ -24,13 +24,13 @@ export async function loadBoundPlan(projectId: string, reference: DocumentRefere
   document.scoringRequirements = document.scoringRequirements.filter((criterion) => cached?.source.verificationStatus === "verified" && cached.criteria.some((allowed) => allowed.id === criterion.id && allowed.text === criterion.text && allowed.sourceId === criterion.sourceId && allowed.verificationStatus === "verified") && document.sources.some((source) => source.sourceId === criterion.sourceId && source.verificationStatus === "verified"));
   return document;
 }
-export async function generatePlanPpt(projectId: string, reference: DocumentReference, options: PlanPptOptions, signal: AbortSignal, template: PptTemplate = "zhice-dark") {
+export async function generatePlanPpt(projectId: string, reference: DocumentReference, options: PlanPptOptions, signal: AbortSignal, template: PptTemplate = "general") {
   const document = await loadBoundPlan(projectId, reference);
   const blocks = confirmedBlocks(document);
-  if (!blocks.length) throw new PlanDocumentError("请先确认至少一个有正文的计划书章节；待补内容和未确认推断不能作为事实。", 400);
+  if (!document.chapters.some((chapter) => chapter.blocks.some((block) => block.text.trim()))) throw new PlanDocumentError("请先在计划书中写入正文，再生成演示草稿。", 400);
   const config = await getAiConfig("pptGenerator");
   let mode: "ai" | "local" = "local"; const choices: Record<string, string[]> = {}; const warnings: string[] = [];
-  if (config.enabled && config.apiKey && config.baseUrl && config.model) {
+  if (blocks.length && config.enabled && config.apiKey && config.baseUrl && config.model) {
     try {
       const schema = z.object({ selections: z.array(z.object({ topicId: z.string(), blockIds: z.array(z.string()).max(5) })).max(11) });
       const modelSignal = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
@@ -38,7 +38,8 @@ export async function generatePlanPpt(projectId: string, reference: DocumentRefe
       for (const item of result.output.selections) choices[item.topicId] = item.blockIds.filter((id) => blocks.some((block) => block.id === id));
       mode = "ai";
     } catch { signal.throwIfAborted(); warnings.push("模型策划暂不可用，已按已确认原文组织大纲，可继续人工编辑。"); }
-  } else warnings.push("当前使用已确认原文直接组织大纲；后台配置 PPT 模型后可增强素材选择，事实仍由原文提供。");
+  } else if (!blocks.length) warnings.push("已从现有计划书整理演示草稿，未核验内容均保留标记，可在材料自查中集中完善。");
+  else warnings.push("已根据计划书原文整理大纲，可继续编辑。");
   signal.throwIfAborted();
   const outline = createPlanOutline(document, reference, options, choices);
   outline.master = buildPptMasterPlan(outline, { sourceKind: "plan", sourceName: document.title, style: options.focus, template });

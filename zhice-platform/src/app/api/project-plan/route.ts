@@ -1,13 +1,14 @@
-import { runChapter, runReport, runSurvey } from "@/modules/project-plan/server";
-import { planExportResponseSchema, planReportSchema, surveySessionSchema, planWorkspaceSchema, type PlanEvent } from "@/modules/project-plan/types";
+import { runChapter, runChapterReference, runReport, runSurvey } from "@/modules/project-plan/server";
+import { chapterReferenceRequestSchema, planExportResponseSchema, planReportSchema, surveySessionSchema, planWorkspaceSchema, type PlanEvent } from "@/modules/project-plan/types";
 import { createDocxBase64 } from "@/modules/project-plan/server/docx";
 import { z } from "zod";
 import { sameBinding } from "@/shared/contracts/competition-binding";
 import { resolveCompetition } from "@/modules/campus-catalog/server/catalog";
 import { getPlanContext } from "@/modules/project-plan/server";
 
-export const maxDuration = 120;
+export const maxDuration = 180;
 const inputSchema = z.discriminatedUnion("action", [
+  chapterReferenceRequestSchema,
   z.object({ action: z.literal("survey"), workspace: planWorkspaceSchema, session: surveySessionSchema, message: z.string().trim().min(1).max(1200), reportId: z.string().max(180).nullable().optional() }),
   z.object({ action: z.literal("report"), workspace: planWorkspaceSchema, session: surveySessionSchema, reportId: z.string().max(180).nullable().optional() }),
   z.object({ action: z.literal("chapter"), workspace: planWorkspaceSchema, session: surveySessionSchema, report: planReportSchema.nullable(), reportId: z.string().max(180).nullable().optional(), chapterId: z.string().min(1).max(120) }),
@@ -15,11 +16,11 @@ const inputSchema = z.discriminatedUnion("action", [
 ]);
 
 function streamResponse(request: Request, run: (signal: AbortSignal, emit: (event: PlanEvent) => void) => Promise<void>) {
-  const cancellation = new AbortController(); const timeout = AbortSignal.timeout(110_000); const signal = AbortSignal.any([request.signal, cancellation.signal, timeout]); const encoder = new TextEncoder(); let closed = false;
+  const cancellation = new AbortController(); const timeout = AbortSignal.timeout(170_000); const signal = AbortSignal.any([request.signal, cancellation.signal, timeout]); const encoder = new TextEncoder(); let closed = false;
   const body = new ReadableStream<Uint8Array>({ start(controller) {
     const emit = (event: PlanEvent) => { if (!closed) { try { controller.enqueue(encoder.encode("data: " + JSON.stringify(event) + "\n\n")); } catch { closed = true; cancellation.abort(); } } };
     const heartbeat = setInterval(() => { if (!closed) { try { controller.enqueue(encoder.encode(": keep-alive\n\n")); } catch { closed = true; cancellation.abort(); } } }, 8000);
-    void run(signal, emit).catch(() => { if (!signal.aborted) emit({ type: "error", message: timeout.aborted ? "生成超时，请保留已有草稿并重试。" : "本次生成中断，已接收内容仍可阅读并重试。" }); }).finally(() => { clearInterval(heartbeat); if (!closed) { closed = true; controller.close(); } });
+    void run(signal, emit).catch(() => { if (!request.signal.aborted && !cancellation.signal.aborted) emit({ type: "error", message: timeout.aborted ? "生成超时，请保留已有草稿并重试。" : "本次生成中断，已接收内容仍可阅读并重试。" }); }).finally(() => { clearInterval(heartbeat); if (!closed) { closed = true; controller.close(); } });
   }, cancel() { closed = true; cancellation.abort(); } });
   return new Response(body, { headers: { "Content-Type": "text/event-stream; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" } });
 }
@@ -40,8 +41,9 @@ export async function POST(request: Request) {
   const competition = (await resolveCompetition(input.workspace.binding.competitionId));
   if (!competition?.tracks.some((track) => track.trackId === input.workspace.binding.trackId)) return Response.json({ error: "请先选择有效比赛和赛道。" }, { status: 409 });
   if (input.session.binding && !sameBinding(input.session.binding, input.workspace.binding)) return Response.json({ error: "问卷属于其他比赛或项目，请重新开始。" }, { status: 409 });
-  if ((input.action === "chapter" || input.action === "export") && input.report && !sameBinding(input.report.binding, input.workspace.binding)) return Response.json({ error: "报告不属于当前比赛或项目，请重新生成。" }, { status: 409 });
-  if (input.action !== "survey" && !input.session.complete) return Response.json({ error: "请先完成当前比赛的项目问卷。" }, { status: 409 });
+  if ((input.action === "chapter" || input.action === "chapter_reference" || input.action === "export") && input.report && !sameBinding(input.report.binding, input.workspace.binding)) return Response.json({ error: "报告不属于当前比赛或项目，请重新生成。" }, { status: 409 });
+  if (input.action === "chapter_reference") return streamResponse(request, (signal, emit) => runChapterReference(input, signal, emit));
+  if (input.workspace.intent === "formal" && input.action !== "survey" && !input.session.complete) return Response.json({ error: "正式材料需要先补齐当前比赛的项目信息。" }, { status: 409 });
   const context = await getPlanContext(input.workspace.reportId, input.workspace);
   if (input.workspace.intent === "formal" && !context.canGenerateFormal) return Response.json({ error: "暂不能生成正式计划书：" + context.blockers.join("；") }, { status: 409 });
   if (input.action === "survey") return streamResponse(request, (signal, emit) => runSurvey(input.session, input.message, input.workspace.reportId, signal, emit, input.workspace));

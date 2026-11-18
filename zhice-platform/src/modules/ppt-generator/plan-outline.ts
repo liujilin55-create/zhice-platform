@@ -35,13 +35,20 @@ export function traceOutline(outline: PptOutline, document: PlanDocument): PptOu
 
 export function createPlanOutline(document: PlanDocument, reference: DocumentReference, options: PlanPptOptions, choices: Record<string, string[]> = {}): PptOutline {
   const blocks = confirmedBlocks(document);
+  const draftBlocks = document.chapters.flatMap((chapter) => chapter.blocks.filter((block) => (!chapter.confirmed || !block.confirmed) && block.marker !== "supplement" && block.text.trim()).map((block) => ({ ...block, chapterId: chapter.id })));
+  const pendingSnippets = (chapterIds: readonly string[], match?: RegExp) => {
+    const matched = match ? draftBlocks.filter((block) => match.test(block.text)) : [];
+    const candidates = matched.length ? matched : draftBlocks.filter((block) => chapterIds.includes(block.chapterId));
+    return candidates.flatMap((block) => fragments(block.text)).map((text) => isPendingClaim(text) ? text : `【待核验】${text}`);
+  };
   const pages = options.pages - 1;
   const topics = [...PPT_TOPICS];
   if (options.focus === "technical") topics.sort((a, b) => Number(["technology", "innovation", "validation"].includes(b.id)) - Number(["technology", "innovation", "validation"].includes(a.id)));
   const groups = Array.from({ length: Math.min(pages, topics.length) }, () => [] as typeof topics);
   topics.forEach((topic, index) => groups[Math.min(groups.length - 1, Math.floor(index * groups.length / topics.length))].push(topic));
-  const summary = blocks.filter((block) => ["executive-summary", "conclusion"].includes(block.chapterId)).flatMap((block) => fragments(block.text)).slice(0, 2);
-  const slides: PptSlide[] = [{ id: crypto.randomUUID(), title: document.projectName, layout: "cover", bullets: summary.length ? summary : ["【建议补充】本稿摘自已确认章节，未核验内容保留标记"], speakerNotes: summary.length ? summary.join("\n") : "【建议补充】介绍项目名称与汇报主题，正文事实见后续各页的计划书来源。", topicIds: ["cover"] }];
+  const confirmedSummary = blocks.filter((block) => ["executive-summary", "conclusion"].includes(block.chapterId)).flatMap((block) => fragments(block.text)).slice(0, 2);
+  const summary = confirmedSummary.length ? confirmedSummary : pendingSnippets(["executive-summary", "conclusion"]).slice(0, 2);
+  const slides: PptSlide[] = [{ id: crypto.randomUUID(), title: document.projectName, layout: "cover", bullets: summary.length ? summary : ["【建议补充】介绍项目目标与核心方案"], speakerNotes: summary.length ? summary.join("\n") : "【建议补充】介绍项目名称与汇报主题，正文事实见后续各页的计划书来源。", topicIds: ["cover"] }];
   for (const group of groups) {
     const bullets: string[] = [];
     for (const topic of group) {
@@ -49,17 +56,19 @@ export function createPlanOutline(document: PlanDocument, reference: DocumentRef
       const eligible = matched.length ? matched : ["technology", "solution", "team", "summary"].includes(topic.id) ? blocks.filter((block) => (topic.chapters as readonly string[]).includes(block.chapterId)) : [];
       const selected = choices[topic.id]?.flatMap((id) => eligible.filter((block) => block.id === id)) || [];
       const candidates = selected.length ? selected : [...eligible].sort((a, b) => Number(topic.keywords.test(b.text)) - Number(topic.keywords.test(a.text)));
-      const snippets = candidates.flatMap((block) => fragments(block.text)).filter((text) => !bullets.includes(text));
+      const confirmedSnippets = candidates.flatMap((block) => fragments(block.text)).filter((text) => !bullets.includes(text));
+      const snippets = confirmedSnippets.length ? confirmedSnippets : pendingSnippets(topic.chapters, topic.keywords).filter((text) => !bullets.includes(text));
       bullets.push(...snippets.slice(0, group.length > 1 ? 2 : 3));
-      if (!snippets.length) bullets.push(`【建议补充】${topic.title}缺少已确认素材，请回计划书补充`);
+      if (!snippets.length) bullets.push(`【建议补充】${topic.title}暂无正文，请回计划书补充`);
     }
     slides.push({ id: crypto.randomUUID(), title: group.map((topic) => topic.title).join(" · "), layout: group.some((topic) => topic.id === "summary") ? "closing" : "content", topicIds: group.map((topic) => topic.id), bullets: bullets.slice(0, 5), speakerNotes: bullets.slice(0, 5).join("\n") });
   }
   const extraPages = [{ title: "评分点与证据", match: /评分|证据/, topic: "scoring" }, { title: "验证细节", match: /验证|测试|实验|结果/, topic: "validation" }, { title: "资源与推进安排", match: /资源|计划|预算|阶段/, topic: "schedule" }];
   for (let index = 0; slides.length < options.pages; index++) {
     const extra = extraPages[index % extraPages.length];
-    const snippets = blocks.filter((block) => extra.match.test(block.text)).flatMap((block) => fragments(block.text)).slice(0, 3);
-    const bullets = snippets.length ? snippets : [`【建议补充】${extra.title}缺少已确认素材`];
+    const confirmedSnippets = blocks.filter((block) => extra.match.test(block.text)).flatMap((block) => fragments(block.text)).slice(0, 3);
+    const snippets = confirmedSnippets.length ? confirmedSnippets : pendingSnippets([], extra.match).slice(0, 3);
+    const bullets = snippets.length ? snippets : [`【建议补充】${extra.title}暂无正文`];
     slides.splice(slides.length - 1, 0, { id: crypto.randomUUID(), title: extra.title, bullets, speakerNotes: bullets.join("\n"), layout: "content", topicIds: [extra.topic] });
   }
   return traceOutline({ title: document.projectName, subtitle: document.title, slides, planSource: reference }, document);
@@ -69,7 +78,7 @@ export function checkPlanOutline(outline: PptOutline, document: PlanDocument): P
   const checks: PptCheck[] = []; const blocks = confirmedBlocks(document);
   if (outline.title !== document.projectName || outline.slides[0]?.title !== document.projectName) checks.push({ code: "project-name", severity: "error", message: "PPT 标题和封面必须与当前计划书的项目名称一致。" });
   if (new Set(outline.slides.map((slide) => slide.id)).size !== outline.slides.length) checks.push({ code: "duplicate-slide", severity: "error", message: "页面标识重复，请重新生成。" });
-  if (document.chapters.some((chapter) => !chapter.confirmed)) checks.push({ code: "unconfirmed-chapters", severity: "warning", message: "未确认章节已排除，PPT 默认仅使用已确认章节。" });
+  if (document.chapters.some((chapter) => !chapter.confirmed)) checks.push({ code: "unconfirmed-chapters", severity: "warning", message: "未核验章节仅作为带标记的草稿使用，不作为已确认事实。" });
   if (document.chapters.some((chapter) => chapter.blocks.some((block) => !block.confirmed))) checks.push({ code: "unconfirmed-blocks", severity: "warning", message: "待补数据和未确认推断不作为事实引用。" });
   const traced = traceOutline(outline, document);
   for (const slide of traced.slides) {
